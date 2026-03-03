@@ -1,5 +1,6 @@
 """Файл с функциями для работы с API SpaceX"""
-
+import time
+import logging
 import requests
 from entities import (
     Capsules,
@@ -14,13 +15,22 @@ from entities import (
     StarlinkSat,
 )
 
+logger = logging.getLogger(__name__)
 
-def get_data_from_url(url: str):
-    """Функция загрузки данных по URL"""
-    req_answer = requests.get(url, timeout=30)
-    if req_answer.status_code == 404:
-        raise AttributeError("Неверное значение URL-адреса")
-    return req_answer.text
+
+def get_data_from_url(url: str, max_attempts=3):
+    for attempt in range(max_attempts):
+        try:
+            # Увеличиваем таймаут с каждой попыткой
+            timeout = 300 * (attempt + 1)  # 300, 600, 900 секунд
+            req_answer = requests.get(url, timeout=timeout)
+            req_answer.raise_for_status()
+            return req_answer.json()
+        except requests.exceptions.RequestException as e:
+            if attempt == max_attempts - 1:
+                raise ValueError(f"Ошибка сети к {url} после {max_attempts} попыток: {str(e)}")
+            logger.warning(f"Попытка {attempt + 1} не удалась, повтор через 10 сек...")
+            time.sleep(10)
 
 
 def get_starlinks(sat_json):

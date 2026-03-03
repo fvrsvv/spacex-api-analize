@@ -21,11 +21,16 @@ def load_data_to_db(function_class, url, postgres_conn_id):
     pg_hook = PostgresHook(postgres_conn_id=postgres_conn_id)
     engine = pg_hook.get_sqlalchemy_engine()
     session = Session(bind=engine)
-    json_values = json.loads(u.get_data_from_url(url))
-    session.add_all([function_class(json_value) for json_value in json_values])
+    
+    json_values = u.get_data_from_url(url) 
+    
+    if not isinstance(json_values, list):
+        logger.error(f"Ожидался список, получен {type(json_values)}")
+        json_values = [json_values]
+    
+    session.add_all([function_class(item) for item in json_values])
     session.commit()
-    logger.info(f"Данные от URL({url}) обработаны успешно")
-
+    logger.info(f"Данные от URL({url}) обработаны успешно: {len(json_values)} записей")
 
 logger = logging.getLogger(__name__)
 
