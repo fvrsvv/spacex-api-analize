@@ -1,7 +1,6 @@
 """Файл с функциями для работы с API SpaceX"""
 import time
 import logging
-import requests
 from entities import (
     Capsules,
     Cores,
@@ -14,72 +13,109 @@ from entities import (
     Ships,
     StarlinkSat,
 )
+from urllib3.exceptions import ReadTimeoutError, MaxRetryError
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+import json
+import logging
+import time
+import requests
+
+import requests.packages.urllib3.util.connection as urllib3_cn
+import socket
+
+urllib3_cn.allowed_gai_family = lambda: socket.AF_INET
 
 logger = logging.getLogger(__name__)
 
-
 def get_data_from_url(url: str, max_attempts=3):
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+        'Accept-Encoding': 'gzip, deflate, br, zstd',
+        'Connection': 'keep-alive'
+    }
+
     for attempt in range(max_attempts):
         try:
-            # Увеличиваем таймаут с каждой попыткой
-            timeout = 300 * (attempt + 1)  # 300, 600, 900 секунд
-            req_answer = requests.get(url, timeout=timeout)
-            req_answer.raise_for_status()
-            return req_answer.json()
+            timeout = (15, 15 + 15 * attempt)   # 60, 120, 180
+            logger.info(f"Попытка {attempt+1}/{max_attempts} к {url} (таймаут read: {timeout[1]}с)")
+            response = requests.get(
+                url,
+                headers=headers,
+                timeout=timeout,
+                stream=True
+                # hooks={'pre_request': lambda r: setattr(r, 'socket_family', socket.AF_INET)}
+            )
+            response.raise_for_status()
+
+            content = b""
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    content += chunk
+                    logger.debug(f"Скачано {len(content)/1024/1024:.1f} MB")
+
+            data = json.loads(content.decode('utf-8'))
+            logger.info(f"Успешно получено {len(content)/1024/1024:.1f} MB (сжато)")
+            return data
+
         except requests.exceptions.RequestException as e:
             if attempt == max_attempts - 1:
-                raise ValueError(f"Ошибка сети к {url} после {max_attempts} попыток: {str(e)}")
-            logger.warning(f"Попытка {attempt + 1} не удалась, повтор через 10 сек...")
-            time.sleep(10)
+                raise ValueError(f"Не удалось получить данные от {url} после {max_attempts} попыток: {str(e)}")
+            logger.warning(f"Попытка {attempt+1} провалилась: {str(e)}. Ждём 15 сек...")
+            time.sleep(15)
+
+    raise RuntimeError("Не должно сюда дойти")
 
 
-def get_starlinks(sat_json):
-    """Функция для работы с данными спутников Starlink"""
-    starlink_sat = StarlinkSat(
-        spacetrack=sat_json["spaceTrack"],
-        version=sat_json["version"],
-        launch=sat_json["launch"],
-        longitude=sat_json["longitude"],
-        latitude=sat_json["latitude"],
-        height_km=sat_json["height_km"],
-        velocity_kms=sat_json["velocity_kms"],
-        id=sat_json["id"],
-    )
-    return starlink_sat
+def get_data_from_query(endpoint: str, limit: int = 1000, page: int = 1, extra_query: dict = None):
+    """Универсальная функция для тяжёлых эндпоинтов через POST /query"""
+    url = f"https://api.spacexdata.com/v4/{endpoint}/query"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Content-Type': 'application/json'
+    }
 
+    payload = {
+        "query": extra_query or {},           # например {"upcoming": True} для launches
+        "options": {
+            "limit": limit,
+            "page": page,
+            "sort": {"date_utc": -1} if endpoint == "launches" else {"spaceTrack.EPOCH": -1}
+        }
+    }
 
-def get_launches(sat_json):
-    """Функция для работы с данными запусков SpaceX"""
-    launches = LaunchesSpaceX(
-        fairings=sat_json["fairings"],
-        links=sat_json["links"],
-        static_fire_date_utc=sat_json["static_fire_date_utc"],
-        static_fire_date_unix=sat_json["static_fire_date_unix"],
-        tbd=sat_json["tbd"],
-        net=sat_json["net"],
-        window=sat_json["window"],
-        rocket=sat_json["rocket"],
-        success=sat_json["success"],
-        failures=sat_json["failures"],
-        details=sat_json["details"],
-        crew=sat_json["crew"],
-        ships=sat_json["ships"],
-        capsules=sat_json["capsules"],
-        payloads=sat_json["payloads"],
-        launchpad=sat_json["launchpad"],
-        auto_update=sat_json["auto_update"],
-        flight_number=sat_json["flight_number"],
-        name=sat_json["name"],
-        date_utc=sat_json["date_utc"],
-        date_unix=sat_json["date_unix"],
-        date_local=sat_json["date_local"],
-        date_precision=sat_json["date_precision"],
-        upcoming=sat_json["upcoming"],
-        cores=sat_json["cores"],
-        id=sat_json["id"],
-    )
-    return launches
+    for attempt in range(3):
+        try:
+            logger.info(f"POST /query {endpoint} (page {page}, limit {limit}) попытка {attempt+1}")
+            response = requests.post(url, json=payload, headers=headers, timeout=(10, 60))
+            response.raise_for_status()
+            data = response.json()
+            docs = data.get("docs", [])
+            logger.info(f"Получено {len(docs)} записей из {endpoint}")
+            return docs
+        except Exception as e:
+            if attempt == 2:
+                raise
+            logger.warning(f"Попытка {attempt+1} провалилась: {e}")
+            time.sleep(5)
 
+def get_all_from_query(endpoint: str, batch_size=100):
+    all_docs = []
+    page = 1
+    while True:
+        docs = get_data_from_query(endpoint, limit=batch_size, page=page)
+        if not docs:
+            break
+        all_docs.extend(docs)
+        logger.info(f"Собрано {len(all_docs)} записей из {endpoint} (page {page})")
+        page += 1
+        time.sleep(2)  # пауза, чтобы не нагружать API
+    return all_docs
 
 def get_capsules(sat_json):
     """Функция для работы с данными запусков SpaceX"""
@@ -263,3 +299,49 @@ def get_rockets(sat_json):
         id=sat_json["id"],
     )
     return rockets
+
+def get_launches(sat_json):
+    """Функция для работы с данными запусков SpaceX"""
+    launches = LaunchesSpaceX(
+        fairings=sat_json["fairings"],
+        links=sat_json["links"],
+        static_fire_date_utc=sat_json["static_fire_date_utc"],
+        static_fire_date_unix=sat_json["static_fire_date_unix"],
+        tbd=sat_json["tbd"],
+        net=sat_json["net"],
+        window=sat_json["window"],
+        rocket=sat_json["rocket"],
+        success=sat_json["success"],
+        failures=sat_json["failures"],
+        details=sat_json["details"],
+        crew=sat_json["crew"],
+        ships=sat_json["ships"],
+        capsules=sat_json["capsules"],
+        payloads=sat_json["payloads"],
+        launchpad=sat_json["launchpad"],
+        auto_update=sat_json["auto_update"],
+        flight_number=sat_json["flight_number"],
+        name=sat_json["name"],
+        date_utc=sat_json["date_utc"],
+        date_unix=sat_json["date_unix"],
+        date_local=sat_json["date_local"],
+        date_precision=sat_json["date_precision"],
+        upcoming=sat_json["upcoming"],
+        cores=sat_json["cores"],
+        id=sat_json["id"],
+    )
+    return launches
+
+def get_starlinks(sat_json):
+    """Функция для работы с данными спутников Starlink"""
+    starlink_sat = StarlinkSat(
+        spacetrack=sat_json["spaceTrack"],
+        version=sat_json["version"],
+        launch=sat_json["launch"],
+        longitude=sat_json["longitude"],
+        latitude=sat_json["latitude"],
+        height_km=sat_json["height_km"],
+        velocity_kms=sat_json["velocity_kms"],
+        id=sat_json["id"],
+    )
+    return starlink_sat

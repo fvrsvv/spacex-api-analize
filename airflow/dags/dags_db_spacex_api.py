@@ -1,8 +1,5 @@
 """DAG по работе с API SpaceX"""
 
-import json
-import logging
-
 import utils as u
 from airflow import DAG
 from airflow.operators.python import PythonOperator
@@ -11,18 +8,27 @@ from airflow.providers.postgres.operators.postgres import PostgresOperator
 from airflow.utils.dates import days_ago
 from sqlalchemy.orm import Session
 
+import logging
+import json
+import requests
 
 # Класс с константами
 class K:
     HOST = "https://api.spacexdata.com/v4"
 
+logger = logging.getLogger(__name__)
 
-def load_data_to_db(function_class, url, postgres_conn_id):
+def load_data_to_db(function_class, url=None, query_endpoint=None, limit=1000, postgres_conn_id="server_publicist"):
     pg_hook = PostgresHook(postgres_conn_id=postgres_conn_id)
     engine = pg_hook.get_sqlalchemy_engine()
     session = Session(bind=engine)
     
-    json_values = u.get_data_from_url(url) 
+    if query_endpoint:
+        json_values = u.get_all_from_query("launches", batch_size=100)
+    elif url:
+        json_values = u.get_data_from_url(url)
+    else:
+        raise ValueError("Укажи url или query_endpoint")
     
     if not isinstance(json_values, list):
         logger.error(f"Ожидался список, получен {type(json_values)}")
@@ -32,35 +38,10 @@ def load_data_to_db(function_class, url, postgres_conn_id):
     session.commit()
     logger.info(f"Данные от URL({url}) обработаны успешно: {len(json_values)} записей")
 
-logger = logging.getLogger(__name__)
-
-
 dag = DAG(
     dag_id="dags_db_spacex_api",
     start_date=days_ago(5),
     schedule_interval=None,
-)
-
-add_starlink_values_to_table = PythonOperator(
-    task_id="add_starlink_values_to_table",
-    python_callable=load_data_to_db,
-    op_kwargs={
-        "function_class": u.get_starlinks,
-        "url": f"{K.HOST}/starlink",
-        "postgres_conn_id": "server_publicist",
-    },
-    dag=dag,
-)
-
-add_launches_values_to_table = PythonOperator(
-    task_id="add_launches_values_to_table",
-    python_callable=load_data_to_db,
-    op_kwargs={
-        "function_class": u.get_launches,
-        "url": f"{K.HOST}/launches",
-        "postgres_conn_id": "server_publicist",
-    },
-    dag=dag,
 )
 
 add_capsules_values_to_table = PythonOperator(
@@ -151,6 +132,32 @@ add_rockets_values_to_table = PythonOperator(
     dag=dag,
 )
 
+add_launches_values_to_table = PythonOperator(
+    task_id="add_launches_values_to_table",
+    python_callable=load_data_to_db,
+    op_kwargs={
+        "function_class": u.get_launches,
+        "url": None,
+        "query_endpoint": "launches",
+        "limit": 500,                   
+        "postgres_conn_id": "server_publicist",
+    },
+    dag=dag,
+)
+
+add_starlink_values_to_table = PythonOperator(
+    task_id="add_starlink_values_to_table",
+    python_callable=load_data_to_db,
+    op_kwargs={
+        "function_class": u.get_starlinks,
+        "url": None,                   
+        "query_endpoint": "starlink",  
+        "limit": 2000,
+        "postgres_conn_id": "server_publicist",
+    },
+    dag=dag,
+)
+
 check_db_connection = PostgresOperator(
     task_id="check_db_connection",
     postgres_conn_id="server_publicist",
@@ -162,8 +169,6 @@ check_db_connection = PostgresOperator(
 
 (
     check_db_connection
-    >> add_starlink_values_to_table
-    >> add_launches_values_to_table
     >> add_capsules_values_to_table
     >> add_cores_values_to_table
     >> add_crew_values_to_table
@@ -172,4 +177,6 @@ check_db_connection = PostgresOperator(
     >> add_payload_values_to_table
     >> add_ships_values_to_table
     >> add_rockets_values_to_table
+    >> add_launches_values_to_table
+    >> add_starlink_values_to_table
 )
