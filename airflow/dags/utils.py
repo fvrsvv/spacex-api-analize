@@ -1,6 +1,8 @@
 """Файл с функциями для работы с API SpaceX"""
 import time
 import logging
+import json
+import requests
 from entities import (
     Capsules,
     Cores,
@@ -13,21 +15,12 @@ from entities import (
     Ships,
     StarlinkSat,
 )
-from urllib3.exceptions import ReadTimeoutError, MaxRetryError
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-import json
-import logging
-import time
-import requests
 
 import requests.packages.urllib3.util.connection as urllib3_cn
 import socket
-
 urllib3_cn.allowed_gai_family = lambda: socket.AF_INET
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def get_data_from_url(url: str, max_attempts=3):
@@ -40,7 +33,7 @@ def get_data_from_url(url: str, max_attempts=3):
 
     for attempt in range(max_attempts):
         try:
-            timeout = (15, 15 + 15 * attempt)   # 60, 120, 180
+            timeout = (15, 15 + 15 * attempt) 
             logger.info(f"Попытка {attempt+1}/{max_attempts} к {url} (таймаут read: {timeout[1]}с)")
             response = requests.get(
                 url,
@@ -70,52 +63,87 @@ def get_data_from_url(url: str, max_attempts=3):
     raise RuntimeError("Не должно сюда дойти")
 
 
-def get_data_from_query(endpoint: str, limit: int = 1000, page: int = 1, extra_query: dict = None):
-    """Универсальная функция для тяжёлых эндпоинтов через POST /query"""
+def get_data_from_query(
+    endpoint: str,
+    limit_per_page: int = 40,       # уменьшил до 80 — надёжнее против таймаутов
+    max_retries: int = 4,
+    extra_options: dict = None
+) -> list:
+    """Загружает все записи через POST /{endpoint}/query с пагинацией"""
     url = f"https://api.spacexdata.com/v4/{endpoint}/query"
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'application/json',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Content-Type': 'application/json'
-    }
-
-    payload = {
-        "query": extra_query or {},           # например {"upcoming": True} для launches
-        "options": {
-            "limit": limit,
-            "page": page,
-            "sort": {"date_utc": -1} if endpoint == "launches" else {"spaceTrack.EPOCH": -1}
-        }
-    }
-
-    for attempt in range(3):
-        try:
-            logger.info(f"POST /query {endpoint} (page {page}, limit {limit}) попытка {attempt+1}")
-            response = requests.post(url, json=payload, headers=headers, timeout=(10, 60))
-            response.raise_for_status()
-            data = response.json()
-            docs = data.get("docs", [])
-            logger.info(f"Получено {len(docs)} записей из {endpoint}")
-            return docs
-        except Exception as e:
-            if attempt == 2:
-                raise
-            logger.warning(f"Попытка {attempt+1} провалилась: {e}")
-            time.sleep(5)
-
-def get_all_from_query(endpoint: str, batch_size=100):
-    all_docs = []
+    
+    all_data = []
     page = 1
+
     while True:
-        docs = get_data_from_query(endpoint, limit=batch_size, page=page)
-        if not docs:
-            break
-        all_docs.extend(docs)
-        logger.info(f"Собрано {len(all_docs)} записей из {endpoint} (page {page})")
+        payload = {
+            "query": {}, 
+            "options": {
+                "limit": limit_per_page,
+                "page": page,
+                "sort": {"date_utc": -1}, 
+                **(extra_options or {})
+            }
+        }
+
+        success = False
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"POST {endpoint}/query page={page} limit={limit_per_page} attempt={attempt+1}")
+                
+                response = requests.post(
+                    url,
+                    json=payload,
+                    timeout=(10, 90),
+                    headers={
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json',
+                        'Accept-Encoding': 'gzip, deflate'
+                    }
+                )
+                response.raise_for_status()
+                
+                data = response.json()
+                total_docs = data.get("totalDocs")
+                if total_docs is not None:
+                    logger.info(f"API сообщает: totalDocs = {total_docs}, текущая page {page}, limit {limit_per_page}")
+                docs = data.get("docs", [])
+
+                
+                if not docs:
+                    logger.info(f"Конец данных: всего собрано {len(all_data)} уникальных записей")
+                    return all_data
+                
+                all_data.extend(docs)
+                logger.info(f"Page {page}: +{len(docs)} → всего {len(all_data)}")
+                
+                success = True
+                break  # успешная страница → выходим из попыток
+
+            except requests.exceptions.ReadTimeout as e:
+                if attempt == max_retries - 1:
+                    logger.error(f"Таймауты на странице {page} после {max_retries} попыток")
+                    raise
+                logger.warning(f"Timeout page {page} attempt {attempt+1}, ждём...")
+                time.sleep(8 * (attempt + 1))
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Ошибка на странице {page}: {e}")
+                if attempt == max_retries - 1:
+                    raise
+                time.sleep(5)
+
+        if not success:
+            raise RuntimeError(f"Не удалось загрузить страницу {page} после {max_retries} попыток")
+
         page += 1
-        time.sleep(2)  # пауза, чтобы не нагружать API
-    return all_docs
+        time.sleep(0.8)
+    return all_data
+
+
+def get_all_from_query(query_endpoint: str, limit_per_page: int = 40):
+    docs = get_data_from_query(query_endpoint, limit_per_page=limit_per_page)
+    logger.info(f"Собрано {len(docs)} записей из {query_endpoint}")
+    return docs
 
 def get_capsules(sat_json):
     """Функция для работы с данными запусков SpaceX"""

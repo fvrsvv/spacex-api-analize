@@ -9,13 +9,12 @@ from airflow.utils.dates import days_ago
 from sqlalchemy.orm import Session
 
 import logging
-import json
-import requests
 
 # Класс с константами
 class K:
     HOST = "https://api.spacexdata.com/v4"
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def load_data_to_db(function_class, url=None, query_endpoint=None, limit=1000, postgres_conn_id="server_publicist"):
@@ -24,7 +23,7 @@ def load_data_to_db(function_class, url=None, query_endpoint=None, limit=1000, p
     session = Session(bind=engine)
     
     if query_endpoint:
-        json_values = u.get_all_from_query("launches", batch_size=100)
+        json_values = u.get_all_from_query(query_endpoint)
     elif url:
         json_values = u.get_data_from_url(url)
     else:
@@ -139,7 +138,7 @@ add_launches_values_to_table = PythonOperator(
         "function_class": u.get_launches,
         "url": None,
         "query_endpoint": "launches",
-        "limit": 500,                   
+        # "limit": 500,                   
         "postgres_conn_id": "server_publicist",
     },
     dag=dag,
