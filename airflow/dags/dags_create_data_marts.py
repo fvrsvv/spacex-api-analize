@@ -8,6 +8,8 @@ dag = DAG(
     dag_id="create_data_marts",
     start_date=days_ago(5),
     schedule_interval=None,
+    catchup=False,
+    tags=["test marts"]
 )
 
 create_data_marts = BashOperator(

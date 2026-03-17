@@ -59,7 +59,8 @@ with DAG(
     'test_network_dag',
     start_date=datetime(2024, 1, 1),
     schedule_interval=None,
-    catchup=False
+    catchup=False,
+    tags=["connestion"]
 ) as dag:
     
     test_task = PythonOperator(

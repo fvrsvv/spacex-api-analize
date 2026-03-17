@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 import logging
 
+# Класс с константами
 class K:
     HOST = "https://api.spacexdata.com/v4"
 
@@ -136,8 +137,7 @@ add_launches_values_to_table = PythonOperator(
     op_kwargs={
         "function_class": u.get_launches,
         "url": None,
-        "query_endpoint": "launches",
-        # "limit": 500,                   
+        "query_endpoint": "launches",              
         "postgres_conn_id": "server_publicist",
     },
     dag=dag,
@@ -150,7 +150,6 @@ add_starlink_values_to_table = PythonOperator(
         "function_class": u.get_starlinks,
         "url": None,                   
         "query_endpoint": "starlink",  
-        "limit": 2000,
         "postgres_conn_id": "server_publicist",
     },
     dag=dag,

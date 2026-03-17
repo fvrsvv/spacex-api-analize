@@ -65,8 +65,8 @@ def get_data_from_url(url: str, max_attempts=3):
 
 def get_data_from_query(
     endpoint: str,
-    limit_per_page: int = 40,       # уменьшил до 80 — надёжнее против таймаутов
-    max_retries: int = 4,
+    limit_per_page: int = 100, 
+    max_retries: int = 3,
     extra_options: dict = None
 ) -> list:
     """Загружает все записи через POST /{endpoint}/query с пагинацией"""
