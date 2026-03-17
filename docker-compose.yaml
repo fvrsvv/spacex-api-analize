@@ -263,7 +263,7 @@ services:
       data_postgres:
 
 
-####   Сервер подписчика с данного сервера будем брать данные и класть в CH####
+####   Сервер подписчик с данного сервера будем брать данные и класть в CH####
   server_subscription:
     image: postgres:14
     container_name: server_subscription

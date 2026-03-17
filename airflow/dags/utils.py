@@ -16,9 +16,9 @@ from entities import (
     StarlinkSat,
 )
 
-import requests.packages.urllib3.util.connection as urllib3_cn
-import socket
-urllib3_cn.allowed_gai_family = lambda: socket.AF_INET
+# import requests.packages.urllib3.util.connection as urllib3_cn
+# import socket
+# urllib3_cn.allowed_gai_family = lambda: socket.AF_INET
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

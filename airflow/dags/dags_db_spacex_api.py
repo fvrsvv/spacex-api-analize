@@ -4,20 +4,19 @@ import utils as u
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.providers.postgres.hooks.postgres import PostgresHook
-from airflow.providers.postgres.operators.postgres import PostgresOperator
+from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator
 from airflow.utils.dates import days_ago
 from sqlalchemy.orm import Session
 
 import logging
 
-# Класс с константами
 class K:
     HOST = "https://api.spacexdata.com/v4"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def load_data_to_db(function_class, url=None, query_endpoint=None, limit=1000, postgres_conn_id="server_publicist"):
+def load_data_to_db(function_class, url, query_endpoint=None, postgres_conn_id="server_publicist"):
     pg_hook = PostgresHook(postgres_conn_id=postgres_conn_id)
     engine = pg_hook.get_sqlalchemy_engine()
     session = Session(bind=engine)
@@ -157,9 +156,9 @@ add_starlink_values_to_table = PythonOperator(
     dag=dag,
 )
 
-check_db_connection = PostgresOperator(
+check_db_connection = SQLExecuteQueryOperator(
     task_id="check_db_connection",
-    postgres_conn_id="server_publicist",
+    conn_id="server_publicist",
     sql="""
       SELECT 1
     """,
